@@ -1,0 +1,108 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import json
+import re
+import time
+
+# ------------------------
+# Job URL
+# ------------------------
+url = "https://www.naukri.com/job-listings-devops-engineer-uplers-bengaluru-1-to-3-years-220825010609"
+
+# ------------------------
+# Setup Selenium Chrome
+# ------------------------
+options = webdriver.ChromeOptions()
+options.add_argument("--disable-blink-features=AutomationControlled")
+# options.add_argument("--headless=new")  # run headless if needed
+
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+driver.get(url)
+
+wait = WebDriverWait(driver, 15)
+job_data = {"Job Link": url}
+
+# ------------------------
+# Get full page & job description text
+# ------------------------
+time.sleep(2)
+page_text = driver.find_element(By.TAG_NAME, "body").text
+try:
+    jd_text = driver.find_element(By.CSS_SELECTOR, "div.jd-description").text
+except:
+    jd_text = page_text
+
+# ------------------------
+# Extract Fields (with fallbacks)
+# ------------------------
+# Job Title
+try:
+    job_data["Job Title"] = wait.until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "h1[title]"))
+    ).text
+except:
+    match = re.search(r"(?i)Job Title[:\-]?\s*(.*)", jd_text)
+    job_data["Job Title"] = match.group(1) if match else None
+
+# Company Name
+try:
+    raw_text = driver.find_element(
+        By.CSS_SELECTOR, "div.jd-header-comp-name a"
+    ).text.strip()
+    job_data["Company Name"] = raw_text.split("\n")[0].strip()
+except:
+    try:
+        raw_text = driver.find_element(
+            By.CSS_SELECTOR, "div[class*='jd-header-comp-name']"
+        ).text.strip()
+        job_data["Company Name"] = raw_text.split("\n")[0].strip()
+    except:
+        job_data["Company Name"] = None
+
+
+# Experience
+try:
+    job_data["Experience Range"] = driver.find_element(By.CSS_SELECTOR, "div[class*='exp__']").text
+except:
+    match = re.search(r"(\d+\s*-\s*\d+\s*years|\d+\+?\s*years)", jd_text, flags=re.I)
+    job_data["Experience Range"] = match.group(1) if match else None
+
+# Location
+try:
+    job_data["Location"] = driver.find_element(By.CSS_SELECTOR, "div[class*='location__'] a").text
+except:
+    match = re.search(r"(Bengaluru|Hyderabad|Pune|Mumbai|Delhi|Chennai|Gurgaon)", jd_text)
+    job_data["Location"] = match.group(1) if match else None
+
+# Salary
+try:
+    job_data["Salary (INR)"] = driver.find_element(By.CSS_SELECTOR, "div[class*='salary__'] span").text
+except:
+    match = re.search(r"₹[\d,]+.*", jd_text)
+    job_data["Salary (INR)"] = match.group(0) if match else "Not Disclosed"
+
+# Courses
+courses = re.findall(r"(B\.Tech|MCA|MBA|B\.Sc|M\.Sc|B\.E|M\.E)", jd_text)
+job_data["Course"] = ", ".join(set(courses)) if courses else None
+
+# Skills (keywords in JD)
+skills = re.findall(r"(?i)(Python|Java|AWS|Azure|Docker|Kubernetes|Linux|CI/CD|Git|SQL|Jenkins|Terraform|Ansible)", jd_text)
+job_data["Skills Needed (Mandatory)"] = list(set(skills)) if skills else []
+
+# For Naukri, "Good to Have" not explicit → leave empty
+job_data["Skills Needed (Good to Have)"] = []
+
+# ------------------------
+# Quit driver
+# ------------------------
+driver.quit()
+
+# ------------------------
+# Output
+# ------------------------
+print("\n✅ Extracted Job Data:")
+print(json.dumps(job_data, indent=2, ensure_ascii=False))

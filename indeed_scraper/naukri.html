@@ -1,0 +1,159 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import json
+import re
+
+# ------------------------
+# Job URL
+# ------------------------
+url = "https://www.naukri.com/job-listings-devops-engineer-uplers-bengaluru-1-to-3-years-220825010609"
+
+# ------------------------
+# Setup Selenium Chrome
+# ------------------------
+options = webdriver.ChromeOptions()
+options.add_argument("--disable-blink-features=AutomationControlled")
+# options.add_argument("--headless=new")  # uncomment to run headless
+
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+driver.get(url)
+
+wait = WebDriverWait(driver, 15)
+job_data = {"Job Link": url}
+
+# ------------------------
+# Detect platform
+# ------------------------
+if "naukri.com" in url:
+    site = "naukri"
+elif "indeed.com" in url:
+    site = "indeed"
+elif "linkedin.com" in url:
+    site = "linkedin"
+else:
+    site = "unknown"
+
+# ------------------------
+# Naukri.com
+# ------------------------
+if site == "naukri":
+    try:
+        job_data["Job Title"] = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1[title]"))).text
+    except:
+        job_data["Job Title"] = None
+
+    try:
+        job_data["Company Name"] = driver.find_element(By.CSS_SELECTOR, "div[class*='jd-header-comp-name'] a").text
+    except:
+        job_data["Company Name"] = None
+
+    try:
+        job_data["Experience Range"] = driver.find_element(By.CSS_SELECTOR, "div[class*='exp__k_giM'] span").text
+    except:
+        job_data["Experience Range"] = None
+
+    try:
+        job_data["Location"] = driver.find_element(By.CSS_SELECTOR, "div[class*='location__W_pVs'] a").text
+    except:
+        job_data["Location"] = None
+
+    try:
+        job_data["Salary (INR)"] = driver.find_element(By.CSS_SELECTOR, "div[class*='salary__jdfEC'] span").text
+    except:
+        job_data["Salary (INR)"] = "Not Disclosed"
+
+    # Extract Course and Skills from page text
+    page_text = driver.find_element(By.TAG_NAME, "body").text
+    courses = re.findall(r"(B\.Tech|MCA|MBA|B\.Sc|M\.Sc)", page_text)
+    job_data["Course"] = ", ".join(courses) if courses else None
+
+    skills_mandatory = re.findall(r"(?i)Skills Needed \(Mandatory\):?\s*(.*)", page_text)
+    skills_good = re.findall(r"(?i)Skills Needed \(Good to Have\):?\s*(.*)", page_text)
+    job_data["Skills Needed (Mandatory)"] = skills_mandatory[0].split(",") if skills_mandatory else []
+    job_data["Skills Needed (Good to Have)"] = skills_good[0].split(",") if skills_good else []
+
+# ------------------------
+# Indeed.com
+# ------------------------
+elif site == "indeed":
+    try:
+        job_data["Job Title"] = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1.jobsearch-JobInfoHeader-title"))).text
+    except:
+        job_data["Job Title"] = None
+
+    try:
+        job_data["Company Name"] = driver.find_element(By.CSS_SELECTOR, "div.jobsearch-InlineCompanyRating div").text
+    except:
+        job_data["Company Name"] = None
+
+    try:
+        job_data["Location"] = driver.find_element(By.CSS_SELECTOR, "div.jobsearch-JobInfoHeader-subtitle div").text
+    except:
+        job_data["Location"] = None
+
+    try:
+        job_data["Salary (INR)"] = driver.find_element(By.CSS_SELECTOR, "span.icl-u-xs-mr--xs").text
+    except:
+        job_data["Salary (INR)"] = "Not Disclosed"
+
+    page_text = driver.find_element(By.TAG_NAME, "body").text
+    courses = re.findall(r"(B\.Tech|MCA|MBA|B\.Sc|M\.Sc|B\.E|M\.E)", page_text)
+    job_data["Course"] = ", ".join(courses) if courses else None
+
+    skills = re.findall(r"(?:Skills|Technologies|Requirements):?\s*(.*)", page_text)
+    job_data["Skills Needed (Mandatory)"] = skills[0].split(",") if skills else []
+    job_data["Skills Needed (Good to Have)"] = []
+
+    # Experience Range can sometimes be in description or job info
+    experience = re.findall(r"(\d+\s*-\s*\d+\s*years|\d+\s*years)", page_text, flags=re.IGNORECASE)
+    job_data["Experience Range"] = experience[0] if experience else None
+
+# ------------------------
+# LinkedIn.com
+# ------------------------
+elif site == "linkedin":
+    try:
+        job_data["Job Title"] = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1.topcard__title"))).text
+    except:
+        job_data["Job Title"] = None
+
+    try:
+        job_data["Company Name"] = driver.find_element(By.CSS_SELECTOR, "a.topcard__org-name-link").text
+    except:
+        job_data["Company Name"] = None
+
+    try:
+        job_data["Location"] = driver.find_element(By.CSS_SELECTOR, "span.topcard__flavor.topcard__flavor--bullet").text
+    except:
+        job_data["Location"] = None
+
+    page_text = driver.find_element(By.TAG_NAME, "body").text
+    courses = re.findall(r"(B\.Tech|MCA|MBA|B\.Sc|M\.Sc|B\.E|M\.E)", page_text)
+    job_data["Course"] = ", ".join(courses) if courses else None
+
+    skills = re.findall(r"(?:Skills|Technologies|Requirements):?\s*(.*)", page_text)
+    job_data["Skills Needed (Mandatory)"] = skills[0].split(",") if skills else []
+    job_data["Skills Needed (Good to Have)"] = []
+
+    experience = re.findall(r"(\d+\s*-\s*\d+\s*years|\d+\s*years)", page_text, flags=re.IGNORECASE)
+    job_data["Experience Range"] = experience[0] if experience else None
+
+    job_data["Salary (INR)"] = "Not Disclosed"  # LinkedIn rarely shows salary
+
+# ------------------------
+# Unknown site
+# ------------------------
+else:
+    print("❌ Unsupported website. Currently supports Naukri, Indeed, LinkedIn only.")
+
+driver.quit()
+
+# ------------------------
+# Output results
+# ------------------------
+print("\n✅ Extracted Job Data:")
+print(json.dumps(job_data, indent=2, ensure_ascii=False))

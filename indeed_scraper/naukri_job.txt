@@ -1,0 +1,209 @@
+from flask import Flask, request, jsonify
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import re
+import time
+import random
+import os
+import pickle
+
+app = Flask(__name__)
+
+# -------------------------------
+# Common Keywords
+# -------------------------------
+SKILL_KEYWORDS = [
+    "Python", "Java", "C++", "C#", "JavaScript", "TypeScript",
+    "React", "Angular", "Node.js", "Django", "Flask",
+    "AWS", "Azure", "GCP", "Docker", "Kubernetes",
+    "Linux", "CI/CD", "Git", "SQL", "NoSQL",
+    "Jenkins", "Terraform", "Ansible", "Selenium",
+    "JIRA", "Agile", "Scrum"
+]
+
+COURSES = ["B.Tech", "B.E", "MCA", "MBA", "B.Sc", "M.Sc", "M.E"]
+
+# -------------------------------
+# Job Extractor
+# -------------------------------
+def extract_job(url):
+    if not isinstance(url, str) or not url.strip():
+        return {"error": "Invalid URL provided", "Job Link": url}
+
+    # Selenium options
+    options = webdriver.ChromeOptions()
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--incognito")
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument(
+        f"user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        f"AppleWebKit/537.36 (KHTML, like Gecko) "
+        f"Chrome/{random.randint(110,120)}.0.{random.randint(5000,6000)}.100 Safari/537.36"
+    )
+
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    job_data = {"Job Link": url}
+
+    try:
+        driver.get(url)
+        time.sleep(8)
+
+        # Detect site
+        site = "unknown"
+        if "naukri.com" in url:
+            site = "naukri"
+        elif "indeed" in url:
+            site = "indeed"
+        elif "linkedin" in url:
+            site = "linkedin"
+
+        # Helper function
+        def safe_find_text(selectors):
+            """Try multiple selectors until one works"""
+            if isinstance(selectors, str):
+                selectors = [selectors]
+            for selector in selectors:
+                try:
+                    element = driver.find_element(By.CSS_SELECTOR, selector)
+                    if element and element.text.strip():
+                        return element.text.strip()
+                except:
+                    continue
+            return None
+
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+
+        # Extract Job details per site
+        if site == "naukri":
+            job_data["Job Title"] = safe_find_text("h1[title]") or "Not Disclosed"
+            job_data["Company Name"] = safe_find_text("div.jd-header-comp-name a") or "Not Disclosed"
+            job_data["Location"] = safe_find_text("div[class*='location__'] a") or "Not Disclosed"
+            job_data["Experience Range"] = safe_find_text("div[class*='exp__']") or "Not Disclosed"
+            job_data["Salary (INR)"] = safe_find_text("div[class*='salary__'] span") or "Not Disclosed"
+
+        elif site == "indeed":
+            job_data["Job Title"] = safe_find_text([
+                "h1.jobsearch-JobInfoHeader-title",
+                "h1.jobsearch-JobInfoHeader-title span",
+                "h1 span"
+            ]) or "Not Disclosed"
+
+            job_data["Company Name"] = safe_find_text([
+                "div[data-company-name]",
+                "div.jobsearch-InlineCompanyRating div",
+                "div.css-1h7luk0"   # fallback new indeed class
+            ]) or "Not Disclosed"
+
+            job_data["Location"] = safe_find_text([
+                "div.jobsearch-JobInfoHeader-subtitle div",
+                "div[data-testid='inlineHeader-companyLocation']",
+                "div.css-6z8o9s"   # fallback new indeed class
+            ]) or "Not Disclosed"
+
+            job_data["Salary (INR)"] = safe_find_text([
+                "span.icl-u-xs-mr--xs",
+                "div.salary-snippet",
+                "div.css-1xe2xww"  # fallback new indeed class
+            ]) or "Not Disclosed"
+
+        elif site == "linkedin":
+            job_data["Job Title"] = safe_find_text("h1.topcard__title") or "Not Disclosed"
+            job_data["Company Name"] = safe_find_text("a.topcard__org-name-link") or "Not Disclosed"
+            job_data["Location"] = safe_find_text("span.topcard__flavor--bullet") or "Not Disclosed"
+            job_data["Salary (INR)"] = "Not Disclosed"
+
+        # Extract salary from description if still Not Disclosed
+        if job_data["Salary (INR)"] in [None, "", "Not Disclosed"]:
+            salary_match = re.search(r"(₹[\d,]+(?:\s*-\s*₹[\d,]+)?)", page_text)
+            job_data["Salary (INR)"] = salary_match.group(1) if salary_match else "Not Disclosed"
+
+        # Extract Courses
+        courses_found = [c for c in COURSES if re.search(rf"\b{re.escape(c)}\b", page_text, flags=re.I)]
+        job_data["Course"] = ", ".join(courses_found)
+
+        # Extract Experience
+        exp_match = re.findall(
+            r"(fresher|0\s*-\s*\d+\s*years|\d+\s*-\s*\d+\s*years|\d+\+?\s*years|\d+\s*yrs?)",
+            page_text,
+            flags=re.I,
+        )
+        job_data["Experience Range"] = exp_match[0] if exp_match else "Not Disclosed"
+
+        # Extract Skills
+        found_skills = [s for s in SKILL_KEYWORDS if re.search(rf"\b{re.escape(s)}\b", page_text, flags=re.I)]
+        job_data["Skills"] = ", ".join(found_skills) if found_skills else ""
+
+        # -------------------------------
+        # Filtering logic
+        # -------------------------------
+        def matches_filters(job):
+            title_keywords = [
+                "DevOps", "Cloud Engineer", "SRE",
+                "Data Analyst", "Business Analyst",
+                "Data Science", "Automation Tester",
+                "QA", "Selenium", "Test Automation"
+            ]
+            if not any(k.lower() in job.get("Job Title", "").lower() for k in title_keywords):
+                return False
+
+            exp = job.get("Experience Range", "").lower()
+            if not re.search(r"(fresher|0\s*-\s*5\s*years|[0-5]\s*years?)", exp):
+                return False
+
+            allowed_locations = [
+                "Bengaluru", "Hyderabad", "Chennai",
+                "Pune", "Mumbai", "Delhi NCR",
+                "Noida", "Gurugram", "Kolkata"
+            ]
+            if not any(loc.lower() in job.get("Location", "").lower() for loc in allowed_locations):
+                return False
+
+            return True
+
+        job_data["Store"] = matches_filters(job_data)
+
+    except Exception as e:
+        job_data["error"] = str(e)
+
+    finally:
+        driver.quit()
+
+    return job_data
+
+# -------------------------------
+# Flask Route
+# -------------------------------
+@app.route("/fetch-jobs", methods=["POST"])
+def fetch_jobs():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Empty request body"}), 400
+
+    results = []
+    if isinstance(data, list):
+        for item in data:
+            job_link = None
+            if isinstance(item, dict):
+                job_link = item.get("Job Link")
+            elif isinstance(item, str):
+                job_link = item
+
+            if job_link:
+                results.append(extract_job(job_link))
+            else:
+                results.append({"Job Link": None, "error": "Invalid item in request"})
+    else:
+        return jsonify({"error": "Invalid input. Must be a list of job links or objects."}), 400
+
+    return jsonify(results)
+
+if __name__ == "__main__":
+    app.run(port=3001, debug=True)
